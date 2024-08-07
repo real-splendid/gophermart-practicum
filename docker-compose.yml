@@ -1,17 +1,10 @@
 services:
-  app:
-    image: golang:1.22.5-alpine3.20
-    volumes:
-      - .:/app
-    working_dir: /app
-    command: go run main.go
-    # environment:
-      # - DATABASE_URL=postgres://app:pass@db/short
-
   db:
     image: postgres:16.2-alpine3.19
     ports:
       - 5432:5432
+    volumes:
+      - db-data:/var/lib/postgresql/data
     environment:
       - POSTGRES_DB=gophermart
       - POSTGRES_USER=app
@@ -25,3 +18,6 @@ services:
       - POSTGRES_DB=accrual
       - POSTGRES_USER=app
       - POSTGRES_PASSWORD=pass
+
+volumes:
+  db-data:
