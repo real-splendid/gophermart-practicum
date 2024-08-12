@@ -72,15 +72,9 @@ func (p *pgxStorage) GetUserAuthInfo(ctx context.Context, userName string) (*Use
 	defer cancel()
 
 	r, err := p.dbConn.Query(opCtx, `SELECT id, login, password FROM users WHERE login = $1;`, userName)
-
 	if err != nil {
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
-
 	defer r.Close()
 
 	if r.Next() {
@@ -88,8 +82,11 @@ func (p *pgxStorage) GetUserAuthInfo(ctx context.Context, userName string) (*Use
 		if err := r.Scan(&authData.ID, &authData.Login, &authData.Password); err != nil {
 			return nil, err
 		}
-
 		return &authData, nil
+	}
+
+	if err := r.Err(); err != nil {
+		return nil, err
 	}
 
 	return nil, ErrNoSuchUser
@@ -100,15 +97,9 @@ func (p *pgxStorage) GetUserAuthInfoByID(ctx context.Context, userID uuid.UUID) 
 	defer cancel()
 
 	r, err := p.dbConn.Query(opCtx, `SELECT login, password FROM users WHERE id = $1;`, userID)
-
 	if err != nil {
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
-
 	defer r.Close()
 
 	if r.Next() {
@@ -118,6 +109,10 @@ func (p *pgxStorage) GetUserAuthInfoByID(ctx context.Context, userID uuid.UUID) 
 		}
 
 		return &authData, nil
+	}
+
+	if err := r.Err(); err != nil {
+		return nil, err
 	}
 
 	return nil, ErrNoSuchUser
@@ -153,10 +148,6 @@ func checkDuplicateOrder(p *pgxStorage, opCtx context.Context, orderNumber strin
 	if err != nil {
 		return err
 	}
-
-	if err := r.Err(); err != nil {
-		return err
-	}
 	defer r.Close()
 
 	if r.Next() {
@@ -168,6 +159,10 @@ func checkDuplicateOrder(p *pgxStorage, opCtx context.Context, orderNumber strin
 			return ErrOrderAlreadyPlaced
 		}
 	}
+	if err := r.Err(); err != nil {
+		return err
+	}
+
 	return ErrDuplicateOrder
 }
 
@@ -175,19 +170,9 @@ func (p *pgxStorage) UpdateOrder(ctx context.Context, order Order) error {
 	opCtx, cancel := context.WithTimeout(ctx, DatabaseOperationTimeout)
 	defer cancel()
 
-	tx, err := p.dbConn.Begin(opCtx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(p.ctx)
-
 	p.logger.Info("updating order", zap.Any("order_number", order.OrderNumber), zap.Float64("accrual", order.Accrual))
-	_, err = tx.Exec(opCtx, `UPDATE orders SET status=$1, accrual=$2, updated_at=NOW() WHERE order_number=$3;`, order.Status, order.Accrual, order.OrderNumber)
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit(opCtx)
+	_, err := p.dbConn.Exec(opCtx, `UPDATE orders SET status=$1, accrual=$2, updated_at=NOW() WHERE order_number=$3;`, order.Status, order.Accrual, order.OrderNumber)
+	return err
 }
 
 func (p *pgxStorage) GetOrders(ctx context.Context, userID uuid.UUID) ([]Order, error) {
@@ -199,11 +184,6 @@ func (p *pgxStorage) GetOrders(ctx context.Context, userID uuid.UUID) ([]Order, 
 	if err != nil {
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
-
 	defer r.Close()
 
 	orders := make([]Order, 0)
@@ -216,6 +196,9 @@ func (p *pgxStorage) GetOrders(ctx context.Context, userID uuid.UUID) ([]Order, 
 		}
 		orders = append(orders, order)
 	}
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
 
 	return orders, nil
 }
@@ -225,15 +208,9 @@ func (p *pgxStorage) GetUnfinishedOrders(ctx context.Context) ([]Order, error) {
 	defer cancel()
 
 	r, err := p.dbConn.Query(opCtx, `SELECT order_number, user_id, status, accrual, uploaded_at FROM orders WHERE status IN ('NEW', 'PROCESSING');`)
-
 	if err != nil {
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
-
 	defer r.Close()
 
 	orders := make([]Order, 0)
@@ -246,9 +223,11 @@ func (p *pgxStorage) GetUnfinishedOrders(ctx context.Context) ([]Order, error) {
 		order.UserID = userID
 		orders = append(orders, order)
 	}
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
 
 	p.logger.Info("unfinished orders", zap.Any("orders", orders))
-
 	return orders, nil
 }
 
@@ -262,15 +241,10 @@ func (p *pgxStorage) Withdraw(ctx context.Context, userID uuid.UUID, order strin
 	}
 	defer tx.Rollback(p.ctx)
 
-	r, err := tx.Query(opCtx, `SELECT current, withdrawn FROM balance WHERE user_id = $1;`, userID)
+	r, err := tx.Query(opCtx, `SELECT current, withdrawn FROM balance WHERE user_id = $1 FOR UPDATE;`, userID)
 	if err != nil {
 		return err
 	}
-
-	if err := r.Err(); err != nil {
-		return err
-	}
-
 	defer r.Close()
 
 	info := BalanceInfo{}
@@ -278,6 +252,9 @@ func (p *pgxStorage) Withdraw(ctx context.Context, userID uuid.UUID, order strin
 		if err := r.Scan(&info.Current, &info.Withdrawn); err != nil {
 			return err
 		}
+	}
+	if err := r.Err(); err != nil {
+		return err
 	}
 
 	if info.Current-sum < 0 {
@@ -363,11 +340,6 @@ func (p *pgxStorage) GetBalance(ctx context.Context, userID uuid.UUID) (*Balance
 	if err != nil {
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		return nil, err
-	}
-
 	defer r.Close()
 
 	info := BalanceInfo{}
@@ -375,6 +347,9 @@ func (p *pgxStorage) GetBalance(ctx context.Context, userID uuid.UUID) (*Balance
 		if err := r.Scan(&info.Current, &info.Withdrawn); err != nil {
 			return nil, err
 		}
+	}
+	if err := r.Err(); err != nil {
+		return nil, err
 	}
 
 	return &info, nil
@@ -390,12 +365,6 @@ func (p *pgxStorage) GetWithdrawals(ctx context.Context, userID uuid.UUID) ([]Wi
 		p.logger.Sugar().Errorf("GetWithdrawals: %s\n", err)
 		return nil, err
 	}
-
-	if err := r.Err(); err != nil {
-		p.logger.Sugar().Errorf("GetWithdrawals: %s\n", err)
-		return nil, err
-	}
-
 	defer r.Close()
 
 	ws := make([]Withdrawal, 0)
@@ -407,8 +376,10 @@ func (p *pgxStorage) GetWithdrawals(ctx context.Context, userID uuid.UUID) ([]Wi
 		}
 		ws = append(ws, w)
 	}
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
 
 	p.logger.Sugar().Infof("GetWithdrawals: %v", ws)
-
 	return ws, nil
 }
